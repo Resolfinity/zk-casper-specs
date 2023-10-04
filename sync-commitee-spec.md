@@ -58,3 +58,87 @@ publicInputsRoot - commitment of all inputs, sent to smart contract instead of a
 6. VERIFY THAT THE WITNESSESED Y-COORDINATE HAS THE CORRECT SIGN
 7. VERIFY THE SSZ ROOT OF THE SYNC COMMITTEE 
 8. VERIFY THE POSEIDON ROOT OF THE SYNC COMMITTEE 
+
+#### proof building flow
+
+- Prepare input data
+    1. get current sync committee validators [indexes]
+    2. get all validators [pubkeys]
+    3. calculate aggregated pubkey
+    4. calculate pubkeysBigIntX, pubkeysBigIntY
+    5. get syncCommitteeSSZ ?
+    6. get sync commitee merkle proof against finalized header
+    7. calculate poseidon commitment of the sync commitee
+    8. get finalized header
+        - header root
+        - slot
+        - proposer index
+        - parent root
+        - state root
+        - body root 
+
+- send data above as inputs to the proof market
+    poseidon is public input
+    
+- get proof from market
+- call sc's rotate function with data
+    -  ``` 
+        // LightClientStep
+        uint256 attestedSlot; // slot id, number
+        uint256 finalizedSlot; // slot id, number
+        uint256 participation // how many validators
+        bytes32 finalizedHeaderRoot; 
+        bytes32 executionStateRoot;
+        Groth16Proof proof;
+        
+        // LightClientRotate
+        LightClientStep step (above)
+        bytes32 syncCommitteeSSZ;
+        bytes32 syncCommitteePoseidon;
+        Groth16Proof proof;
+
+#### sc rotate function (Sets the sync committee for the next sync committeee period)
+    - processStep function with LightClientStep
+    - increments sync committee period
+    - verifies rotate proof with inputs
+        - syncCommitteeSSZ
+        - finalizedHeaderRoot
+        - syncCommitteePoseidon
+    - writes syncCommitteePoseidon for new period
+        
+
+#### sc processStep function
+
+*LightClientStep as input, verifies that the header has enough signatures for finality*
+
+calculates commiteePeriod from attestedSlot 
+(slot / SLOTS_PER_PERIOD)
+
+checks if attested slot has syncCommitteePoseidon in storage, e.g. previous rotate function has been processed before
+
+
+verifies step proof
+
+#### sc step function
+LightClientStep as input
+
+processStep - see above
+
+set slot storage
+* update.finalizedSlot
+* update.finalizedHeaderRoot
+* update.executionStateRoot
+
+set 
+head = finalizedSlot
+headers[slot] = finalizedHeaderRoot;
+executionStateRoots[slot] = executionStateRoot;
+
+
+
+
+
+    
+
+
+
