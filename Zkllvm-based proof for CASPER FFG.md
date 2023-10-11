@@ -1,4 +1,4 @@
-# Zkllvm-based proof for CASPER FFG
+# Research plan for Zkllvm-based proof for CASPER
 
 ## Description
 
