@@ -51,3 +51,8 @@ To get rid  reorgs issues, we are listening for new slots with some reasonable d
         * finalized slot id
         * finalized block hash
         * finalized eth1 block, state root, ...
+     
+### Inspired by ..
+
+* [Dender ETH Casper Finality Proof](https://hackmd.io/@metacraft-labs/DendrETH-Casper-Finality-Proofs)
+* [Politop zkCasper](https://research.polytope.technology/zkcasper)
