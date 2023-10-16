@@ -68,15 +68,13 @@ To get rid reorgs issues, we are listening for new slots with some reasonable de
 - [Configuration](#configuration)
   - [Misc](#misc)
 - [Containers](#containers)
-  - [`LightClientSnapshot`](#lightclientsnapshot)
-  - [`LightClientUpdate`](#lightclientupdate)
-  - [`LightClientStore`](#lightclientstore)
-- [Helper functions](#helper-functions)
-  - [`get_subtree_index`](#get_subtree_index)
-- [Light client state updates](#light-client-state-updates)
-  - [`validate_light_client_update`](#validate_light_client_update)
-  - [`apply_light_client_update`](#apply_light_client_update)
-  - [`process_light_client_update`](#process_light_client_update)
+  - [`ZkClientSnapshot`](#ZkClientSnapshot)
+  - [`ZkClientUpdate`](#ZkClientUpdate)
+  - [`ZkClientStore`](#ZkClientStore)
+- [Zk client state updates](#zk-client-state-updates)
+  - [`validate_zk_client_update`](#validate_zk_client_update)
+  - [`apply_zk_client_update`](#apply_zk_client_update)
+  - [`process_zk_client_update`](#process_zk_client_update)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 <!-- /TOC -->
