@@ -81,23 +81,22 @@ To get rid reorgs issues, we are listening for new slots with some reasonable de
 
 ## Introduction
 
-The **casper zk proof system** is .
+The **casper zk proof system** is a zk-proof based client, storing eht2 finalized epochs headers, made in form of evm smart contract.
 
-This diagram shows the basic procedure by which a light client learns about more recent blocks:
+This diagram shows the basic procedure by which a zk client learns about finalized epochs:
 
-![images/high-level.jpg](https://github.com/Resolfinity/zk-casper-specs/blob/main/images/high-level.jpg?raw=true)
+https://whimsical.com/sync-commitees-DFQFTsKn3Wgpj7s4G3FuGw@7YNFXnKbYjQ3UhbX7EjGL
 
 We assume a light client already has a block header at 1st slot of finalized epoch F.
 The light client wants to finalize epoch F+1. The steps the light client needs to take are as follows:
 
-1. Use a Merkle branch to verify the `next_sync_committee` in the slot `N` post-state. This is the sync committee that will be signing block headers during period `X+1`.
-2. Download the aggregate signature of the newer header that the light client is trying to authenticate. This can be found in the child block of the newer block, or the information could be grabbed directly from the p2p network.
-3. Add together the public keys of the subset of the sync committee that participated in the aggregate signature (the bitfield in the signature will tell you who participated)
-4. Verify the signature against the combined public key and the newer block header. If verification passes, the new block header has been successfully authenticated!
+1. get randao from epoch N, calculate seed used for shuffle function
+2. calculate commitees members and balances of epoch N+2 
+3. verify bls signatures of attestations
+4. check that total balance of voted validators more than 2/3 of total balance
+5. check CASPER rules 
+6. update last justified and finalized epochs
 
-The minimum cost for light clients to track the chain is only about 25 kB per two days: 24576 bytes for the 512 48-byte public keys in the sync committee, plus a few hundred bytes for the aggregate signature, the light client header and the Merkle branch. Of course, closely following the chain at a high level of granularity does require more data bandwidth as you would have to download each header you're verifying (plus the signature for it).
-
-The extremely low cost for light clients is intended to help make the beacon chain light client friendly for extremely constrained environments. Such environments include mobile phones, embedded IoT devices, in-browser wallets and other blockchains (for cross-chain bridges).
 
 ## Commitee members randomization
 
@@ -151,6 +150,8 @@ todo:
 | Name                        | Value                                                                |
 | --------------------------- | -------------------------------------------------------------------- |
 | `FINALIZED_ROOT_INDEX`      | `get_generalized_index(BeaconState, 'finalized_checkpoint', 'root')` |
+| `MAX_VALIDATORS_PER_COMMITTEE`| **?? tbd ??** |
+| `EPOCHS_PER_HISTORICAL_VECTOR`| **?? tbd ??** |
 
 
 These values are the [generalized indices](https://github.com/ethereum/eth2.0-specs/blob/dev/ssz/merkle-proofs.md#generalized-merkle-tree-index) for the finalized checkpoint and the next sync committee in a `BeaconState`. A generalized index is a way of referring to a position of an object in a Merkle tree, so that the Merkle proof verification algorithm knows what path to check the hashes against.
@@ -271,11 +272,11 @@ def validate_light_client_update(snapshot: ZkClientSnapshot,
     
 ```
 
-This function has 5 parts:
+This function has next parts:
 
 1. **Basic validation**: confirm that the `update.header` is newer than the snapshot header. **What about skips?**
 
-5. **Verify the proof**: we use other data in update as public inputs.
+2. **Verify the proof**: we use other data in update as public inputs.
 
 #### `apply_zk_client_update`
 
@@ -304,3 +305,89 @@ def process_zk_client_update(store: ZkClientStore, update: ZkClientUpdate, curre
 
 The main function for processing a light client update. We first validate that it is correct.
 *What other checks should we have made?*
+
+# Circuits
+
+
+### `VerifyAttestation`
+
+Verifies that the signatures in the collected aggregated attestations match the aggregated public keys of the validators participating in the particular sub-committee.
+
+```python
+class FullAttestation(object):
+    # proof that we have checked validators of this attestation are valid
+    validators_proof: Proof
+    participants_pub_keys: List[BLSSignature, MAX_VALIDATORS_PER_COMMITTEE]
+    signature: BLSSignature
+```
+
+```python
+def verify_aggregated_attestation(
+    signing_root,
+    attestation: FullAttestation
+) -> None:
+    domain = compute_domain(?DOMAIN_AGGREGATE_AND_PROOF?, update.fork_version, genesis_validators_root)
+    signing_root = compute_signing_root(signed_header, domain)
+    bls.FastAggregateVerify(attestation.participants_pub_keys, signing_root, attestation.signature) 
+```
+
+
+### `VerifyValidatorsShuffle`
+
+```python
+class FullAttestation(object):
+    # proof that we have checked validators of this attestation are valid
+    validators_shuffle: Map(commitee_index, list(validators_pubkeys))
+    participants_pub_keys: List[BLSSignature, MAX_VALIDATORS_PER_COMMITTEE]
+    signature: BLSSignature
+```
+
+
+# Calculation logic
+
+## Shuffled commitees
+
+Below are functions from ethereum spec
+
+```python
+def get_seed(state: BeaconState, epoch: Epoch, domain_type: DomainType) -> Bytes32:
+    """
+    Return the seed at ``epoch``.
+    """
+    mix = get_randao_mix(state, Epoch(epoch + EPOCHS_PER_HISTORICAL_VECTOR - MIN_SEED_LOOKAHEAD - 1)) 
+    return hash(domain_type + uint_to_bytes(epoch) + mix)
+```
+
+```python 
+def get_beacon_committee(state: BeaconState, slot: Slot, index: CommitteeIndex) -> Sequence[ValidatorIndex]:
+    """
+    Return the beacon committee at ``slot`` for ``index``.
+    """
+    epoch = compute_epoch_at_slot(slot)
+    committees_per_slot = get_committee_count_per_slot(state, epoch)
+    return compute_committee(
+        indices=get_active_validator_indices(state, epoch),
+        seed=get_seed(state, epoch, DOMAIN_BEACON_ATTESTER),
+        index=(slot % SLOTS_PER_EPOCH) * committees_per_slot + index,
+        count=committees_per_slot * SLOTS_PER_EPOCH,
+    )
+```
+
+```python 
+def get_randao_mix(state: BeaconState, epoch: Epoch) -> Bytes32:
+    """
+    Return the randao mix at a recent ``epoch``.
+    """
+    return state.randao_mixes[epoch % EPOCHS_PER_HISTORICAL_VECTOR]
+```
+
+```python
+def get_committee_count_per_slot(state: BeaconState, epoch: Epoch) -> uint64:
+    """
+    Return the number of committees in each slot for the given ``epoch``.
+    """
+    return max(uint64(1), min(
+        MAX_COMMITTEES_PER_SLOT,
+        uint64(len(get_active_validator_indices(state, epoch))) // SLOTS_PER_EPOCH // TARGET_COMMITTEE_SIZE,
+    ))
+```
