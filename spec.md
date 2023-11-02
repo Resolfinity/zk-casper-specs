@@ -258,3 +258,42 @@ Note: full validators set shuffle implementation here:  [Java function](https://
 #### Get merkle-proofs of validators existence in validators set
 
 Each commitee consists of 400+ validators plus-minus one.
+
+*todo: function that calculates commitee length
+how exactly commitees formed from shuffled indexes*
+
+
+Finally, we have following structs:
+
+For each commitee:
+
+* list of 400 validators objects
+* list of multi-proof of inclusion of these validators into state over state root
+* epochId
+* commitee index
+
+#### Get all attestations from 64 blocks
+
+#### Pre-calculate and select attestations that give us majority
+
+We select around 1500 attestations with same source and targets which have supermajority.
+
+#### Build proofs for all of these attestations
+inputs:
+* attestation
+    * source
+    * target
+    * signature
+    * pre-calculated pubkey = sum of voter's pubkeys
+* list of validators
+    * pubkey
+    * balance
+* multi merkle proof of validators existense in validators of finalized set
+
+output: sum of voters balances
+
+#### Build final proof of finality
+
+Inputs:
+
+* 
