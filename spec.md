@@ -10,6 +10,120 @@ We want to create Light Clients in EVM blockhains. Light Client should be trustl
 
 It allows to use stored finalized checkpoints as a trusted source of execution layer state root.
 
+## TLDR
+
+1. Epoch N starts
+2. Get finalized checkpoint header
+4. Get state of finalized checkpoint
+5. Get validators list from finalized state
+6. Get active validators indexes
+7. Calculate totalActiveBalance for set and save to DB
+9. Get randao from end of epoch N-2
+10. Shuffle active validators indexes
+11. Calculate commitees memberships and save to DB
+12.  Start listening to block attestations
+
+for each attestation calculate balances:
+
+1. get votedTotalBalance
+3. save attestation and its balances to db
+
+for each post-block check if we have enough balances voted for consensus:
+1. group attestations by source/target
+2. calculate sum(votedTotalBalances) for each group
+
+if we have consensus, e.g. sum(votedTotalBalances) for attestations group with same source/target > 2/3 of totalActiveBalance (stored in DB):
+
+Prove all consensus attestations:
+
+for each attestation:
+1. get attestation from db
+2. get commitee validators from db
+3. get voted validators from commitee and attestation.aggregation_bits
+4. get multi-proof of these validators existense in finalizedHeader.state_root
+5. build proof in proof-market
+
+--- 
+
+Attestation proof
+
+tldr: 
+* check all signers are validators from state
+* check aggregated signature against attestation message and validators pub_keys
+* calculate as output total balance of the voted validators
+
+inputs:
+
+1. attestation (source, target, slot, commitee_index, aggregated_signature)
+2. commitee validators list
+3. merkle multi proof of validators
+4. finalizedHeader.state_root
+
+public inputs:
+1. source/target
+3. slot/commitee_index
+
+output: 
+1. totalVotedBalance
+
+proof logic:
+
+input.source == attestation.source
+input.target == attestation.target
+input.commitee_index = attestation.commitee_index
+input.slot = attestation.slot
+
+create ssz.roots of validators list
+merkleVerify(ssz.roots, merkle multi proof, state_root)
+
+calculate sum(pub_keys)
+bls.verify(attestation.data, attestation.signature, sum(pub_keys))
+
+output totalVotedBalance = sum(validators.effectiveBalance)
+
+---
+
+Finalization proof
+
+tldr:
+
+* check all attestations have same source/target
+* verify all attestation proofs
+* verify validators set merkle proof agains finalizedHeader.state_root
+* calculate total balance of all active validators in set
+* verify sum(attestations totalVotedBalances) > 2/3 of total active set balance
+
+inputs:
+1. validators set list
+2. validators merkle proof
+3. attestations
+4. attestation proofs
+
+public inputs:
+1. epochId
+2. finalizedHeader.state_root
+3. source/target
+
+proof logic:
+
+for each attestation
+* attestation_proof.public_input.source = source
+* attestation_proof.public_input.target = target
+
+calculate totalAttestedBalance = sum(attestations.totalVotedBalance)
+
+merkle.verify(ssz(validators set), validators merkle proof, finalizedHeader.state_root)
+
+calculate total active validators balance = sum(active_validators.balances)
+
+check totalAttestedBalance > 2/3 total active set balance
+
+-- -- 
+
+Then we call lightClient.update(final proof, source, target)
+
+
+
 
 ## Light Client
 
@@ -182,7 +296,7 @@ To spin up data processing, we build backend system, based on
 
 **todo: add diagram of relay architecture**
 
-### Data requests
+### Data processing
 
 #### Listen to the end of epoch N
 Beacon chain has a slots of 12 seconds each. We don't need to listen to some nodes events. We can be sure that node has state for slot after some timestamp passed.
@@ -205,7 +319,7 @@ Here we start to calculate data to get curcuit inputs.
 First, we shuffle validators set. 
 Then we calculate commitee lengths and split validators to 64 commitees.
 
-*todo: describe why 64 commitees. do we need to calculate commitees count on the fly? links to spec functions if yes*
+64 commitees per slot is a constant.
 
 ```javascript=
 // @returns shuffled indexes of full validatots set
@@ -215,6 +329,14 @@ function fullShuffle(randao, validators, epochId): Array<index: number> {
 ```
 
 We will pre-calculate commitees memberships, based on consensus spec compute_shuffled_index function.
+
+Validators are divided among the committees in an epoch by the compute_committee() function.
+
+First, we calculate active validators from state.validators:
+
+todo: active validators filter folmula
+
+Then, we get shuffled list of active validators:
 
 ```python=
 def compute_shuffled_index(index: uint64, index_count: uint64, seed: Bytes32) -> uint64:
@@ -252,31 +374,120 @@ def get_seed(state: BeaconState, epoch: Epoch, domain_type: DomainType) -> Bytes
 
 Note: full validators set shuffle implementation here:  [Java function](https://github.com/ConsenSys/teku/blob/04294427f2622c86326db68f3b88ed20d1e6cdc1/ethereum/spec/src/main/java/tech/pegasys/teku/spec/logic/common/helpers/MiscHelpers.java#L154 )
 
+Then, we compute commitees for each slot:
+
+```python=
+def compute_committee(indices: Sequence[ValidatorIndex],
+                      seed: Bytes32,
+                      index: uint64,
+                      count: uint64) -> Sequence[ValidatorIndex]:
+    """
+    Return the committee corresponding to ``indices``, ``seed``, ``index``, and committee ``count``.
+    """
+    start = (len(indices) * index) // count
+    end = (len(indices) * uint64(index + 1)) // count
+    return [indices[compute_shuffled_index(uint64(i), uint64(len(indices)), seed)] for i in range(start, end)]
+```
+
+```python=
+def get_beacon_committee(state: BeaconState, slot: Slot, index: CommitteeIndex) -> Sequence[ValidatorIndex]:
+    """
+    Return the beacon committee at ``slot`` for ``index``.
+    """
+    epoch = compute_epoch_at_slot(slot)
+    
+    // always 64
+    committees_per_slot = get_committee_count_per_slot(state, epoch)
+    return compute_committee(
+        indices=get_active_validator_indices(state, epoch),
+        seed=get_seed(state, epoch, DOMAIN_BEACON_ATTESTER),
+        index=(slot % SLOTS_PER_EPOCH) * committees_per_slot + index,
+        count=committees_per_slot * SLOTS_PER_EPOCH,
+    )
+```
 
 
+#### Get all attestations from 64 blocks
+
+From slot 1 of epoch, we start getting blocks and from blocks we got attestations:
+
+request: 
+
+```
+GET /eth/v2/beacon/blocks/{slot_id}
+```
+
+response: 
+```json
+{
+    //...
+    data: {
+        // ...
+         "attestations": [
+          {
+            "aggregation_bits": "0xffffffffbfffdffffffffffffffffffffffffffffffffffffffffffffffbffffffffffffffffffffffffffffffffffffffffffff01",
+            "data": {
+              "slot": "7517974",
+              "index": "27",
+              "beacon_block_root": "0x...",
+              "source": {
+                "epoch": "234935",
+                "root": "0x..."
+              },
+              "target": {
+                "epoch": "234936",
+                "root": "0x..."
+              }
+            },
+            "signature": "0x..."
+          },
+    }
+}
+```
+
+
+#### Pre-calculate consensus
+
+We use Postgres to save attestations from a recent block.
+
+We for each attestation we calculate votedTotalBalance and totalCommiteeBalance of all commitee members.
+
+Sum of all totalCommiteeBalances will be total active validators balance, used to determine if 2/3 of total voted balances leads us to the consensus. 
+
+```javascript=
+function getAttestationTotalBalances(commiteeIndex, slotId) {
+    let votedTotalBalance = 0;
+    let totalCommiteeBalance = 0;
+    
+    for (bit, index in attestation.aggregation_bits) {
+        validatorIndex = 
+    }
+}
+```
+
+
+then we run function detecting if we have consensus already ot not yet:
+
+
+
+```javascript=
+function isConsensusAchieved(epochId) {
+    
+}
+```
 
 #### Get merkle-proofs of validators existence in validators set
 
-Each commitee consists of 400+ validators plus-minus one.
 
-*todo: function that calculates commitee length
-how exactly commitees formed from shuffled indexes*
-
-
-Finally, we have following structs:
+Finally, we have following:
 
 For each commitee:
 
-* list of 400 validators objects
+* list of 400 validators objects from active_validators set
 * list of multi-proof of inclusion of these validators into state over state root
 * epochId
 * commitee index
 
-#### Get all attestations from 64 blocks
-
-#### Pre-calculate and select attestations that give us majority
-
-We select around 1500 attestations with same source and targets which have supermajority.
 
 #### Build proofs for all of these attestations
 inputs:
@@ -284,16 +495,31 @@ inputs:
     * source
     * target
     * signature
+    * commitee index
     * pre-calculated pubkey = sum of voter's pubkeys
 * list of validators
     * pubkey
     * balance
 * multi merkle proof of validators existense in validators of finalized set
 
-output: sum of voters balances
+output: 
+* sum of voters balances
+* commiteeId/slotId commitment
 
 #### Build final proof of finality
 
 Inputs:
 
-* 
+* 1500 proofs of attestations
+* 1500 commiteeId/slotId commitments
+
+Logic: 
+Prove that for each attestation
+* source/target the same
+    * todo: the same or can be different?
+* has slotId from target epoch
+* commiteeIndexes/slotIds not overlapping
+    * hence all validators signed these attestations are distinct by design
+* attestation proof is valid
+* sum of attestations balances more than 2/3 of total active balance
+
